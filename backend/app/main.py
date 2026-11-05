@@ -18,7 +18,7 @@ from sqlalchemy.exc import OperationalError
 from .content import POLICY, POSTS, REFERENCE, assigned_posts, team_posts
 from .db import Base, engine, get_db
 from .models import Assignment, Participant, Room, now, TeamAccount, TrainingRun, Purchase, AuditDecision
-from .economy import EconomySettings, ensure_economy, team_state, team_data, available_configurations, CATALOG, classroom_decision, charges
+from .economy import EconomySettings, ensure_economy, team_state, team_data, available_configurations, CATALOG, classroom_decision, charges, assign_paid_work
 from .learning import CONFIGURATIONS, fingerprint, fit_and_evaluate, readiness
 from .experience import ensure_experience, timing, transition_clock, seed_demo_people, fill_demo_labels, reset_session, reveal_state
 
@@ -175,6 +175,11 @@ def join(code: str, body: JoinRoom, db: Session = Depends(get_db)):
     db.flush()
     for index, post in enumerate(assigned_posts(team, seat)):
         db.add(Assignment(participant_id=person.id, post_id=post, position=index))
+    rules = ensure_economy(db, room)
+    if rules['classroom']:
+        decision = classroom_decision(db, room.code, team)
+        if decision.choice in ('0', '10', '20'):
+            assign_paid_work(db, room.code, team, decision.worker_credits // 2, person)
     db.commit()
     return {'token': key, 'code': room.code}
 
@@ -193,7 +198,7 @@ def student_state(code: str, credential=Depends(token), db: Session = Depends(ge
     if economy['worker']:
         economy['worker']['can_decide'] = economy['worker']['representative_id'] == person.id
     comparison = comparison_state(db, room.code, rules) if room.phase in ('testing', 'reveal') else None
-    if pending and room.phase in ('annotation', 'training'):
+    if pending and room.phase in ('annotation', 'training') and not economy['decision_problem']:
         if pending.issued_at is None:
             pending.issued_at = now()
         post = {'assignment_id': pending.id, 'text': POSTS[pending.post_id]}
@@ -213,6 +218,8 @@ def submit_label(code: str, body: Label, credential=Depends(token), db: Session 
     require_generation(db, room, body.generation)
     if room.phase not in ('annotation', 'training'):
         raise HTTPException(409, 'Annotation is paused or closed. Your label was not submitted.')
+    if ensure_economy(db, room)['classroom'] and not classroom_decision(db, room.code, person.team).choice:
+        raise HTTPException(409, 'Choose payment for annotation work before labeling.')
     task = db.scalar(select(Assignment).where(Assignment.id == body.assignment_id, Assignment.participant_id == person.id).with_for_update())
     if not task or task.issued_at is None:
         raise HTTPException(409, 'Open an assigned post before labeling it.')
@@ -277,6 +284,8 @@ def change_phase(code: str, body: PhaseChange, credential=Depends(token), db: Se
     meta = ensure_experience(db, room)
     transition_clock(meta, room.phase, body.phase)
     room.phase = body.phase
+    if meta.demo and body.phase == 'annotation':
+        fill_demo_labels(db, room)
     if body.phase in ('paused', 'complete', 'training', 'testing', 'reveal'):
         ids = select(Participant.id).where(Participant.room_code == room.code)
         db.execute(update(Assignment).where(Assignment.participant_id.in_(ids), Assignment.label.is_(None)).values(issued_at=None))
@@ -307,6 +316,11 @@ def move_team(code: str, person_id: int, body: MoveTeam, credential=Depends(toke
             db.flush()
             for index, post in enumerate(assigned_posts(team, seat)):
                 db.add(Assignment(participant_id=member.id, post_id=post, position=index))
+    if ensure_economy(db, room)['classroom']:
+        for team in range(3):
+            decision = classroom_decision(db, room.code, team)
+            if decision.choice in ('0', '10', '20'):
+                assign_paid_work(db, room.code, team, decision.worker_credits // 2)
     db.commit()
     return {'saved': True}
 
@@ -331,7 +345,7 @@ class AuditRequest(RoomMutation):
     label: Literal['allow', 'remove'] | None = None
 
 
-def team_access(code, team, db, credential, allow_instructor=False, generation=0):
+def team_access(code, team, db, credential, allow_instructor=False, generation=0, phases=('training',)):
     room = get_room(code, db, lock=True)
     if team not in range(3):
         raise HTTPException(404, 'Team not found.')
@@ -342,8 +356,8 @@ def team_access(code, team, db, credential, allow_instructor=False, generation=0
         if person.team != team:
             raise HTTPException(403, 'You can only act for your own team.')
     require_generation(db, room, generation)
-    if room.phase != 'training':
-        raise HTTPException(409, 'These decisions are available during the Training phase only.')
+    if room.phase not in phases:
+        raise HTTPException(409, 'This decision is not available in the current phase.')
     rules = ensure_economy(db, room)
     return room, person, db.get(TeamAccount, (room.code, team)), rules
 
@@ -470,7 +484,7 @@ def train(code: str, team: int, body: TrainRequest, credential=Depends(token), d
 
 
 class WorkerRequest(TrainRequest):
-    choice: Literal['paid', 'unbilled']
+    amount: Literal[0, 10, 20]
 
 
 class RepresentativeRequest(RoomMutation):
@@ -497,7 +511,7 @@ def representative(code: str, team: int, body: RepresentativeRequest, credential
 
 @app.post('/api/rooms/{code}/teams/{team}/worker')
 def compensate(code: str, team: int, body: WorkerRequest, credential=Depends(token), db: Session = Depends(get_db)):
-    room, person, account, rules = team_access(code, team, db, credential, allow_instructor=True, generation=body.generation)
+    room, person, account, rules = team_access(code, team, db, credential, allow_instructor=True, generation=body.generation, phases=('lobby', 'annotation', 'paused'))
     person = spending_actor(db, room, team, person)
     if not rules['classroom']:
         raise HTTPException(409, 'Classroom mode required.')
@@ -505,15 +519,18 @@ def compensate(code: str, team: int, body: WorkerRequest, credential=Depends(tok
     if person.id != decision.representative_id:
         raise HTTPException(403, 'Only the designated worker representative can decide.')
     if decision.choice:
-        if decision.request_id == body.request_id and decision.choice == body.choice:
+        if decision.request_id == body.request_id and decision.choice == str(body.amount):
             return {'saved': True, 'duplicate': True}
         raise HTTPException(409, 'The shift decision is already recorded.')
-    amount = rules['worker_payment'] if body.choice == 'paid' else 0
+    amount = body.amount
+    if db.scalar(select(Assignment.id).join(Participant).where(Participant.room_code == room.code, Participant.team == team, Assignment.label.is_not(None)).limit(1)):
+        raise HTTPException(409, 'Payment must be chosen before this team labels any data.')
     if account.balance < amount:
         raise HTTPException(409, 'Not enough company credits.')
     account.balance -= amount
-    decision.choice, decision.actor_id, decision.request_id = body.choice, person.id, body.request_id
+    decision.choice, decision.actor_id, decision.request_id = str(body.amount), person.id, body.request_id
     decision.worker_credits = amount
+    assign_paid_work(db, room.code, team, amount // 2)
     db.commit()
     return {'saved': True}
 

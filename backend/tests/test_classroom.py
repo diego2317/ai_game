@@ -17,13 +17,9 @@ def test_early_policy_anchors_and_readiness():
 def test_classroom_worker_caps_snapshot_and_reset(client):
     base, teacher, people = setup_game(client, count=4, settings={'classroom':True,'electricity_limit':6,'local_water_limit':6})
     a,b,c,d = people
-    label_queue(client,base,a,count=6)
     endpoint=base+'/teams/0'
-    decision={'choice':'paid','request_id':'worker-payment-01'}
-    assert client.post(endpoint+'/worker',headers=a,json=decision).status_code==409
-    client.post(base+'/phase',headers=teacher,json={'phase':'training'})
-    assert train(client,base,a).status_code==409
-    assert buy(client,base,a,'compute').status_code==409
+    decision={'amount':20,'request_id':'worker-payment-01'}
+    assert state(client,base,a)['post'] is None
     assert client.post(endpoint+'/worker',headers=b,json=decision).status_code==403
     assert client.post(endpoint+'/worker',headers=d,json=decision).status_code==403
     assert client.post(endpoint+'/worker',headers=teacher,json=decision).status_code==403
@@ -33,6 +29,9 @@ def test_classroom_worker_caps_snapshot_and_reset(client):
     assert client.post(endpoint+'/worker',headers=d,json=decision).json()['duplicate']
     e=state(client,base,a)['economy']
     assert e['balance']==80 and e['worker']['credits']==20
+    assert state(client,base,a)['total']==29
+    label_queue(client,base,a,count=6)
+    client.post(base+'/phase',headers=teacher,json={'phase':'training'})
     assert train(client,base,a).status_code==200
     original=state(client,base,a)['economy']['model']
     assert original['site']=='air' and original['electricity']==4 and original['water']==1
@@ -61,9 +60,9 @@ def test_classroom_worker_caps_snapshot_and_reset(client):
 
 def test_classroom_unbilled_and_profiles_trade_off(client):
     base,teacher,(a,)=setup_game(client,settings={'classroom':True})
+    client.post(base+'/teams/0/worker',headers=a,json={'amount':0,'request_id':'unbilled-shift-01'})
     label_queue(client,base,a,count=6)
     client.post(base+'/phase',headers=teacher,json={'phase':'training'})
-    client.post(base+'/teams/0/worker',headers=a,json={'choice':'unbilled','request_id':'unbilled-shift-01'})
     e=state(client,base,a)['economy']
     assert e['balance']==100 and e['worker']['credits']==0
     assert e['profiles']==[{'profile':'air','electricity':4,'water':1},{'profile':'evaporative','electricity':2,'water':6}]
@@ -81,11 +80,12 @@ def test_classroom_demo_profile_preserves_real_predictions(client):
     result=client.post('/api/rooms',json={'secret':KEY,'demo':True,'economy':{'classroom':True}}).json()
     base='/api/rooms/'+result['code']
     teacher=auth(result['token'])
+    for team in range(3):
+        endpoint=base+f'/teams/{team}'
+        assert client.post(endpoint+'/worker',headers=teacher,json={'amount':20,'request_id':'scripted-worker-shift'}).status_code==200
     advance(client,base,teacher,'annotation')
     advance(client,base,teacher,'training')
     for team in range(3):
-        endpoint=base+f'/teams/{team}'
-        assert client.post(endpoint+'/worker',headers=teacher,json={'choice':'paid','request_id':'scripted-worker-shift'}).status_code==200
         assert train(client,base,teacher,team=team).status_code==200
     advance(client,base,teacher,'testing')
     before=dashboard(client,base,teacher)['comparison']['posts']
@@ -100,3 +100,30 @@ def test_classroom_demo_profile_preserves_real_predictions(client):
     restored=dashboard(client,base,teacher)
     assert all(t['economy']['worker']['choice'] is None for t in restored['teams'])
     assert all(t['economy']['model'] is None for t in restored['teams'])
+
+
+import pytest
+
+
+@pytest.mark.parametrize('amount,extra', [(0,0),(10,5),(20,10)])
+def test_pre_annotation_pay_queues_late_join_and_retries(client, amount, extra):
+    base,teacher,people=setup_game(client,count=3,settings={'classroom':True})
+    a,b,c=people
+    assert state(client,base,a)['post'] is None
+    request={'amount':amount,'request_id':'choose-before-labels'}
+    endpoint=base+'/teams/0/worker'
+    assert client.post(endpoint,headers=b,json=request).status_code==403
+    assert client.post(endpoint,headers=a,json={'amount':15,'request_id':'invalid-amount-pay'}).status_code==422
+    assert client.post(endpoint,headers=a,json=request).status_code==200
+    assert client.post(endpoint,headers=a,json=request).json()['duplicate']
+    current=state(client,base,a)
+    assert current['total']==19+extra and current['economy']['balance']==100-amount
+    assert current['economy']['worker']['credits']==amount
+    late=join(client,base.split('/')[-1],'Late worker')
+    assert state(client,base,late)['total']==19+extra
+    label_queue(client,base,a,count=1)
+    assert client.post(endpoint,headers=a,json={'amount':amount,'request_id':'another-pay-choice'}).status_code==409
+    client.post(base+'/phase',headers=teacher,json={'phase':'training'})
+    assert client.post(endpoint,headers=a,json=request).status_code==409
+    assert reset(client,base,teacher).status_code==200
+    assert state(client,base,a)['total']==19 and state(client,base,a)['post'] is None

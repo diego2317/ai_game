@@ -56,7 +56,8 @@ def seed_demo_people(db, room):
             for position, post in enumerate(assigned_posts(team, seat)):
                 db.add(Assignment(participant_id=person.id, post_id=post, position=position))
     db.flush()
-    fill_demo_labels(db, room)
+    if not ensure_economy(db, room)['classroom']:
+        fill_demo_labels(db, room)
 
 
 def fill_demo_labels(db, room):
@@ -66,6 +67,9 @@ def fill_demo_labels(db, room):
         seats.update({person.id: seat for seat, person in enumerate(p for p in people if p.team == team)})
     by_id = {p.id:p for p in people}
     tasks = list(db.scalars(select(Assignment).where(Assignment.participant_id.in_(by_id), Assignment.label.is_(None))))
+    rules = ensure_economy(db, room)
+    from .economy import classroom_decision
+    tasks = [t for t in tasks if not rules['classroom'] or classroom_decision(db, room.code, by_id[t.participant_id].team).choice]
     for task in tasks:
         person = by_id[task.participant_id]
         label = 'remove' if task.post_id in DEMO_REMOVE else 'allow'
@@ -99,7 +103,7 @@ def reset_session(db, room, meta, request_id):
     meta.elapsed_before_pause = 0
     db.flush()
     ensure_economy(db, room)
-    if meta.demo:
+    if meta.demo and not ensure_economy(db, room)['classroom']:
         fill_demo_labels(db, room)
 
 

@@ -222,7 +222,11 @@ test('focused classroom: three real teams, late worker, compensation and site re
     await page.goto(`${base}/?room=${code}`)
     await page.getByLabel('Your nickname').fill(`Worker ${i}`)
     await page.getByRole('button',{name:'Enter the room'}).click()
-    await expect(page.getByText(new RegExp(`Worker ${i}`),{exact:true})).toBeVisible()
+    await expect(page.getByText(`Worker ${i}`,{exact:true})).toBeVisible()
+    if(i<3){
+      await page.getByRole('button',{name:'20 credits · 10 extra posts per person',exact:true}).click()
+      await expect(page.getByText(/Company procurement balance: 80/)).toBeVisible()
+    }
   }
   for(const page of pages.slice(0,3)){
     for(const [i,label] of ['Allow','Remove','Allow','Remove','Allow','Allow'].entries()){
@@ -232,8 +236,6 @@ test('focused classroom: three real teams, late worker, compensation and site re
   }
   await teacher.getByRole('button',{name:'Begin training',exact:true}).click()
   for(const page of pages.slice(0,3)){
-    await expect(page.getByRole('button',{name:'Train model',exact:true})).toBeDisabled()
-    await page.getByRole('button',{name:/Pay worker collective/}).click()
     await expect(page.getByText(/Company procurement balance: 80/)).toBeVisible()
     await page.getByLabel('Cooling profile').selectOption('evaporative')
     await page.getByRole('button',{name:'Train model',exact:true}).click()

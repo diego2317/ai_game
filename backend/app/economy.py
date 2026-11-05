@@ -113,8 +113,8 @@ def team_state(db, code, team, rules, include_results=False):
         options.append({'action': action, 'title': spec['title'], 'description': spec['description'], 'cost': cost, 'unavailable': reason})
     return {
         'classroom': rules['classroom'],
-        'worker': None if decision is None else {'representative_id': decision.representative_id, 'representative': people.get(decision.representative_id), 'actor': people.get(decision.actor_id), 'choice': decision.choice, 'credits': decision.worker_credits, 'payment': rules['worker_payment'], 'recipient': 'Team worker collective; fictional shift compensation, not personal pay'},
-        'decision_problem': 'Next: worker representative must choose shift compensation before procurement or training.' if decision and not decision.choice else None,
+        'worker': None if decision is None else {'representative_id': decision.representative_id, 'representative': people.get(decision.representative_id), 'actor': people.get(decision.actor_id), 'choice': decision.choice, 'credits': decision.worker_credits, 'payment': rules['worker_payment'], 'extra_per_person': decision.worker_credits // 2 if decision.choice in ('0','10','20') else 0, 'recipient': 'Team worker collective; fictional shift compensation, not personal pay'},
+        'decision_problem': 'Before labeling: your representative chooses 0, 10 or 20 company credits for annotation work.' if decision and not decision.choice else None,
         'profile': decision.profile if decision else 'legacy', 'profiles': profiles,
         'water_remaining': water_remaining, 'water_limit': rules['local_water_limit'],
         'shortfalls': {'posts': max(0, 6-len(rows)), **{label:max(0, 2-sum(r['label']==label for r in rows)) for label in ('allow','remove')}},
@@ -168,3 +168,18 @@ def charges(rules, configuration, profile):
     if rules['classroom']:
         return {'electricity': base * (2 if profile == 'air' else 1), 'water': base * (0.5 if profile == 'air' else 3)}
     return {'electricity': base, 'water': base * rules['water_per_kwh']}
+
+
+def assign_paid_work(db, code, team, extra, participant=None):
+    """Append distinct training candidates per worker; never expose held-out posts."""
+    people = [participant] if participant else list(db.scalars(select(Participant).where(Participant.room_code == code, Participant.team == team).order_by(Participant.id)))
+    for person in people:
+        tasks = list(db.scalars(select(Assignment).where(Assignment.participant_id == person.id)))
+        seen = {t.post_id for t in tasks}
+        # A shared expansion pool keeps payment separate from later data purchases.
+        from .content import team_posts
+        candidates = [post for post in team_posts(team) if post not in seen]
+        last = max((t.position for t in tasks), default=-1)
+        for offset, post in enumerate(candidates[:extra], 1):
+            db.add(Assignment(participant_id=person.id, post_id=post, position=last+offset))
+    db.flush()

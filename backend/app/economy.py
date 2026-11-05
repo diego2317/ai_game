@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from .content import POSTS
+from .content import POSTS, NEW_TRAIN_IDS
 from .learning import CONFIGURATIONS, fingerprint, readiness
 from .models import Assignment, AuditDecision, Participant, Purchase, RoomRules, TeamAccount, TrainingRun, ClassroomDecision
 
@@ -173,12 +173,15 @@ def charges(rules, configuration, profile):
 def assign_paid_work(db, code, team, extra, participant=None):
     """Append distinct training candidates per worker; never expose held-out posts."""
     people = [participant] if participant else list(db.scalars(select(Participant).where(Participant.room_code == code, Participant.team == team).order_by(Participant.id)))
+    members = list(db.scalars(select(Participant.id).where(Participant.room_code == code, Participant.team == team).order_by(Participant.id)))
     for person in people:
         tasks = list(db.scalars(select(Assignment).where(Assignment.participant_id == person.id)))
         seen = {t.post_id for t in tasks}
         # A shared expansion pool keeps payment separate from later data purchases.
         from .content import team_posts
-        candidates = [post for post in team_posts(team) if post not in seen]
+        offset = (members.index(person.id) * 10) % len(NEW_TRAIN_IDS)
+        pool = NEW_TRAIN_IDS[offset:] + NEW_TRAIN_IDS[:offset]
+        candidates = [post for post in (*pool, *team_posts(team)) if post not in seen]
         last = max((t.position for t in tasks), default=-1)
         for offset, post in enumerate(candidates[:extra], 1):
             db.add(Assignment(participant_id=person.id, post_id=post, position=last+offset))

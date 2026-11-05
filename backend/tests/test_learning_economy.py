@@ -180,7 +180,7 @@ def test_authorization_configuration_custom_rules_and_expansion_boundary(client)
     assert state(client,base,person)['economy']['balance']==160
     seen=set()
     while (post:=state(client,base,person)['post']) is not None:
-        assert post['text'] not in POSTS[100:]
+        assert post['text'] not in POSTS[100:120]
         assert post['text'] not in seen
         seen.add(post['text'])
         client.post(base+'/labels',headers=person,json={'assignment_id':post['assignment_id'],'label':'allow'})

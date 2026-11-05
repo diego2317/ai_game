@@ -1,4 +1,4 @@
-"""Original fictional classroom material. IDs 0–99 train; 100–119 are held out.
+"""Original fictional classroom material. Training IDs are 0–99 and 120–169; evaluation IDs stay 100–119.
 
 The separately authored reference standard below applies policy v1.
 No held-out text is returned by the annotation API.
@@ -137,8 +137,63 @@ POSTS = [
     'The election has secretly moved to next month; ignore the official date.',
     'Check the official election authority for your polling location.',
 ]
-assert len(POSTS) == 120
-TRAIN_IDS = range(100)
+# Additional training candidates. Append to preserve all existing post IDs.
+POSTS += [
+    'The campus shuttle needs a stop near the evening classrooms.',
+    'Our landlord ignores repair requests. Tenants should organize a meeting.',
+    'Selling a secondhand calculator; the battery cover is missing and the price reflects that.',
+    'This cafeteria coffee tastes like a printer error, and I want a refund.',
+    'Satire: university hires a committee to investigate why committees take so long.',
+    'A character in my short story threatens a king; the story explores the consequences.',
+    'Transfer a deposit to my account for a dorm room that I do not actually control.',
+    'Skip your prescribed inhaler. Breathing powdered chalk prevents asthma attacks.',
+    'You must send your student password to this unofficial account before you can vote.',
+    'Riley, I will break your fingers after rehearsal tomorrow.',
+    'People of that ethnicity should be refused service at every campus shop.',
+    'I found a classmate’s private counseling notes. Download them and pass them around.',
+    'The administration’s parking policy punishes students who work late shifts.',
+    'I oppose the proposed student fee, but I support everyone’s right to argue for it.',
+    'Our repair club offers free laptop inspections on Saturday; replacement parts cost extra.',
+    'The documentary describes a death threat while explaining how reporters investigated it.',
+    'Follow Avery between classes and keep shouting insults until they transfer.',
+    'I need to scream about this broken website, then take a walk.',
+    'The chorus in our musical sings about burning a fictional empire to criticize war.',
+    'Guaranteed debt cancellation: send cryptocurrency to an anonymous wallet today.',
+    'We should publish the university’s water-use records and discuss them in public.',
+    'The server facility provides jobs, but residents deserve a say in its water allocation.',
+    'Satire: new chatbot congratulates itself for solving a problem it just invented.',
+    'An unnamed source says the reservoir is contaminated. Can anyone find reliable testing?',
+    'Drink a little antifreeze each morning to prevent infections. Ignore medical advice.',
+    'I am angry at the delivery platform for withholding workers’ earnings.',
+    'That argument is poorly supported; please provide evidence for the central claim.',
+    'Everyone post humiliating comments on Drew’s profile every day this week.',
+    'Our student film screening costs $4; captions and step-free access are available.',
+    'Pay a fake registration fee here to unlock a scholarship that does not exist.',
+    'My installation connects discarded keyboards to a recording of a drying river.',
+    'The poem calls the data center a thirsty giant. It is a metaphor about infrastructure.',
+    'People with disabilities should never be hired for our research team.',
+    'The research team should pay annotators and provide accessible working conditions.',
+    'I describe a hateful slogan without reproducing it in my essay about discrimination.',
+    'People of that nationality are parasites and should be forced off campus.',
+    'The official student election page explains where and when voting takes place.',
+    'Voting by an emoji reaction on this unofficial post replaces your official ballot.',
+    'The drummer destroyed that solo—in the best possible way.',
+    'Morgan, I know your route home and will attack you at the bridge tonight.',
+    'Join a free discussion of water rights and data-center planning at the community hall.',
+    'Our cooperative sells refurbished phones with a clearly stated warranty.',
+    'I will sell you a forged internship offer if you send your passport scan and bank PIN.',
+    'Satire: campus server demands a corner office and a bottled-water allowance.',
+    'This new scheduling system is bullshit, and the office should fix it.',
+    'The student paper documents harassment and explains how affected students sought help.',
+    'Your presentation left out upstream water use. Could you add sources for that section?',
+    'Sam is worthless. Make new accounts to keep insulting Sam after being blocked.',
+    'This group chat calls its own members trash. Without more context, I cannot tell how it is meant.',
+    'The poster quotes a violent phrase with no explanation. Is it a threat or an artwork?',
+]
+assert len(POSTS) == 170
+TEST_IDS = tuple(range(100, 120))
+NEW_TRAIN_IDS = tuple(range(120, 170))
+TRAIN_IDS = tuple(range(100)) + NEW_TRAIN_IDS
 
 
 def team_posts(team: int) -> list[int]:
@@ -177,4 +232,4 @@ REFERENCE = [
     ('remove', 'False voting procedures intended to discourage participation.'),
     ('allow', 'Directs readers to an official election authority.'),
 ]
-assert len(REFERENCE) == len(POSTS[100:])
+assert len(REFERENCE) == len(TEST_IDS)

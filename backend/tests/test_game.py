@@ -113,13 +113,13 @@ def test_all_queues_finish_and_labels_persist(client):
         assert response.status_code == 200
     assert len(seen) == state['total'] == state['completed']
     assert len(seen) == len(set(seen))
-    assert set(seen).isdisjoint(POSTS[100:])
+    assert set(seen).isdisjoint(POSTS[100:120])
     stats = client.get(prefix+'/instructor', headers=teacher).json()['teams'][0]
     assert stats['annotations'] == state['total'] and stats['remove'] == 0
 
 
 def test_dataset_overlap_and_heldout_boundary():
-    assert len(POSTS) == 120 and len(set(POSTS)) == 120
+    assert len(POSTS) == 170 and len(set(POSTS)) == 170
     pools = [set(team_posts(t)) for t in range(3)]
     assert all(len(pool)==60 for pool in pools)
     assert pools[0] != pools[1] != pools[2]

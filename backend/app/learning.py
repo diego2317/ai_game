@@ -9,7 +9,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix
 from threadpoolctl import threadpool_limits
 
-from .content import POSTS, REFERENCE
+from .content import POSTS, REFERENCE, TRAIN_IDS, TEST_IDS
 
 CONFIGURATIONS = {
     'word': {'name': 'Word features · balanced', 'analyzer': 'word', 'ngram_range': (1, 1), 'class_weight': 'balanced', 'multiplier': 1},
@@ -37,7 +37,7 @@ def fit_and_evaluate(rows, configuration):
     problem = readiness(rows)
     if problem:
         raise ValueError(problem)
-    if any(row['post_id'] not in range(100) for row in rows):
+    if any(row['post_id'] not in TRAIN_IDS for row in rows):
         raise ValueError('Held-out posts must never be included in training.')
     settings = CONFIGURATIONS[configuration]
     vectorizer = TfidfVectorizer(analyzer=settings['analyzer'], ngram_range=settings['ngram_range'], max_features=5000, sublinear_tf=True)
@@ -47,7 +47,7 @@ def fit_and_evaluate(rows, configuration):
         features = vectorizer.fit_transform([POSTS[row['post_id']] for row in rows])
         classifier.fit(features, [row['label'] for row in rows])
         training_ms = (perf_counter() - started) * 1000
-        test_features = vectorizer.transform(POSTS[100:])
+        test_features = vectorizer.transform([POSTS[post] for post in TEST_IDS])
         predictions = classifier.predict(test_features)
         probabilities = classifier.predict_proba(test_features)
     target = [label for label, _ in REFERENCE]
@@ -63,7 +63,7 @@ def fit_and_evaluate(rows, configuration):
         'confusion_matrix': confusion_matrix(target, predictions, labels=['allow', 'remove']).tolist(),
         'matrix_labels': ['allow', 'remove'], 'test_count': len(target),
         'reference_version': 'Common Ground policy reference v1', 'warnings': warnings,
-        'predictions': [{'post_id': 100+i, 'prediction': str(predictions[i]),
+        'predictions': [{'post_id': TEST_IDS[i], 'prediction': str(predictions[i]),
                          'confidence': float(max(probabilities[i])),
                          'remove_score': float(probabilities[i][list(classifier.classes_).index('remove')]),
                          'no_known_features': test_features[i].nnz == 0} for i in range(len(target))],

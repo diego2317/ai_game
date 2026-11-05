@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
-from .content import POLICY, POSTS, REFERENCE, assigned_posts, team_posts
+from .content import POLICY, POSTS, REFERENCE, assigned_posts, team_posts, TRAIN_IDS, TEST_IDS, NEW_TRAIN_IDS
 from .db import Base, engine, get_db
 from .models import Assignment, Participant, Room, now, TeamAccount, TrainingRun, Purchase, AuditDecision
 from .economy import EconomySettings, ensure_economy, team_state, team_data, available_configurations, CATALOG, classroom_decision, charges, assign_paid_work
@@ -341,7 +341,7 @@ class TrainRequest(RoomMutation):
 
 
 class AuditRequest(RoomMutation):
-    post_id: int = Field(ge=0, lt=100)
+    post_id: int = Field(ge=0, lt=len(POSTS))
     label: Literal['allow', 'remove'] | None = None
 
 
@@ -398,11 +398,15 @@ def purchase(code: str, team: int, body: PurchaseRequest, credential=Depends(tok
         if account.annotation_packs >= 4:
             raise HTTPException(409, 'All expansion posts have been unlocked.')
         people = list(db.scalars(select(Participant).where(Participant.room_code == room.code, Participant.team == team).order_by(Participant.id)))
-        candidates = [post for post in range(100) if post not in team_posts(team)]
-        posts = candidates[account.annotation_packs*10:(account.annotation_packs+1)*10]
+        assigned = set(db.scalars(select(Assignment.post_id).join(Participant).where(Participant.room_code == room.code, Participant.team == team)))
+        candidates = [post for post in (*NEW_TRAIN_IDS, *range(100)) if post not in team_posts(team) and post not in assigned]
+        posts = candidates[:10]
         for index, post in enumerate(posts):
             owner = people[index % len(people)]
             last = db.scalar(select(Assignment.position).where(Assignment.participant_id == owner.id).order_by(Assignment.position.desc()).limit(1))
+            existing = db.scalar(select(Assignment.id).where(Assignment.participant_id == owner.id, Assignment.post_id == post))
+            if existing is not None:
+                continue
             db.add(Assignment(participant_id=owner.id, post_id=post, position=(last or 0)+1))
             db.flush()
         account.annotation_packs += 1
@@ -555,7 +559,7 @@ def comparison_state(db, code, rules):
             if model:
                 prediction = model['evaluation']['predictions'][i]
                 predictions.append({'team': team['id'], **prediction})
-        posts.append({'post_id': 100+i, 'text': POSTS[100+i], 'reference': reference, 'rationale': rationale,
+        posts.append({'post_id': TEST_IDS[i], 'text': POSTS[TEST_IDS[i]], 'reference': reference, 'rationale': rationale,
                       'predictions': predictions, 'disagreement': len({p['prediction'] for p in predictions}) > 1})
     return {'teams': teams, 'posts': posts,
             'note': 'Reference labels apply Common Ground policy v1; they are a curated standard, not universal moral truth. These 20 examples were excluded from all annotation queues. Repeated testing can guide choices toward this small test set, so later scores are exploratory rather than independent evidence.'}

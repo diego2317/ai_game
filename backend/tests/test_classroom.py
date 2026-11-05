@@ -127,3 +127,26 @@ def test_pre_annotation_pay_queues_late_join_and_retries(client, amount, extra):
     assert client.post(endpoint,headers=a,json=request).status_code==409
     assert reset(client,base,teacher).status_code==200
     assert state(client,base,a)['total']==19 and state(client,base,a)['post'] is None
+
+
+def test_added_posts_reachable_and_evaluation_stays_fixed(client):
+    from backend.app.content import POSTS, TRAIN_IDS, TEST_IDS, NEW_TRAIN_IDS
+    from backend.app.learning import fit_and_evaluate
+    assert len(TRAIN_IDS)==150 and len(TEST_IDS)==20 and not set(TRAIN_IDS)&set(TEST_IDS)
+    assert len(POSTS)==len(set(POSTS))==170
+    base,teacher,people=setup_game(client,count=15,settings={'classroom':True})
+    a=people[0]
+    client.post(base+'/teams/0/worker',headers=a,json={'amount':20,'request_id':'new-posts-payment'})
+    seen=set()
+    for person in people[::3]:
+        while (post:=state(client,base,person)['post']):
+            seen.add(post['text'])
+            client.post(base+'/labels',headers=person,json={'assignment_id':post['assignment_id'],'label':'allow'})
+    assert {POSTS[i] for i in NEW_TRAIN_IDS} <= seen
+    assert not seen & {POSTS[i] for i in TEST_IDS}
+    client.post(base+'/phase',headers=teacher,json={'phase':'training'})
+    assert buy(client,base,a,'annotation').status_code==200
+    assert state(client,base,a)['post'] is not None
+    rows=[{'post_id':i,'label':'allow' if i%2 else 'remove'} for i in NEW_TRAIN_IDS]
+    _,evaluation,_=fit_and_evaluate(rows,'word')
+    assert [p['post_id'] for p in evaluation['predictions']]==list(TEST_IDS)

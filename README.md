@@ -19,9 +19,9 @@ Five-step rehearsal:
 
 1. **0–2 min:** Create a focused room, join 15 students, verify five per team and identify the three representatives. Each team chooses its 0/10/20-credit annotation payment before labeling. Introduce Crawford & Joler's *Anatomy of an AI System* and Berreby's Yale Environment 360 reading.
 2. **2–7 min:** Start annotation. Everyone follows the policy; six submissions can supply mixed training data. Late arrivals may join during the shift. Unfinished queues remain available during Training.
-3. **7–13 min:** Begin Training. The pre-annotation payment is already recorded; teams check what remains for upgrades. Compare cooling charges and remaining caps, make a procurement/site decision, then train. Use the host readiness summary to resolve shortfalls. Replace absent representatives as needed.
+3. **7–13 min:** Begin Training. The pre-annotation payment is already recorded; teams check what remains for upgrades. Compare cooling charges and remaining caps, make a procurement and cooling decisions, then train. Use the host readiness summary to resolve shortfalls. Replace absent representatives as needed.
 4. **13–15 min:** Compare models; explicitly confirm any omission of untrained teams. Detailed classification metrics are optional. Explain that subsequent comparisons reuse the exposed benchmark.
-5. **15–20 min:** Reveal a stored prediction, its snapshot and supporting work/site/hardware. Compare worker compensation and cumulative resource ledgers. Ask “Who supplied the work and who controls the model?” and “What burden did your site choice shift, onto whom, and what would you need to measure?” Reset only after discussion.
+5. **15–20 min:** Reveal a stored prediction, its snapshot and supporting work, cooling profile and hardware. Compare worker compensation and cumulative resource ledgers. Ask “Who supplied the work and who controls the model?” and “What burden did your cooling choice shift, onto whom, and what would you need to measure?” Reset only after discussion.
 
 ## Run locally on Ubuntu
 

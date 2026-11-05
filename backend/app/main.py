@@ -18,7 +18,7 @@ from sqlalchemy.exc import OperationalError
 from .content import POLICY, POSTS, REFERENCE, assigned_posts, team_posts
 from .db import Base, engine, get_db
 from .models import Assignment, Participant, Room, now, TeamAccount, TrainingRun, Purchase, AuditDecision
-from .economy import EconomySettings, ensure_economy, team_state, team_data, available_configurations, CATALOG
+from .economy import EconomySettings, ensure_economy, team_state, team_data, available_configurations, CATALOG, classroom_decision, charges
 from .learning import CONFIGURATIONS, fingerprint, fit_and_evaluate, readiness
 from .experience import ensure_experience, timing, transition_clock, seed_demo_people, fill_demo_labels, reset_session, reveal_state
 
@@ -78,6 +78,7 @@ def require_generation(db, room, generation):
 
 
 class PhaseChange(RoomMutation):
+    omit_untrained: bool = False
     phase: Literal['annotation', 'paused', 'complete', 'training', 'testing', 'reveal']
 
 
@@ -189,13 +190,15 @@ def student_state(code: str, credential=Depends(token), db: Session = Depends(ge
     post = None
     rules = ensure_economy(db, room)
     economy = team_state(db, room.code, person.team, rules, room.phase in ('testing', 'reveal'))
+    if economy['worker']:
+        economy['worker']['can_decide'] = economy['worker']['representative_id'] == person.id
     comparison = comparison_state(db, room.code, rules) if room.phase in ('testing', 'reveal') else None
     if pending and room.phase in ('annotation', 'training'):
         if pending.issued_at is None:
             pending.issued_at = now()
         post = {'assignment_id': pending.id, 'text': POSTS[pending.post_id]}
     reveal = reveal_state(db, room, meta, rules, TEAMS) if room.phase == 'reveal' else None
-    clock = timing(meta, room.phase)
+    clock = timing(meta, room.phase, rules['classroom'])
     db.commit()
     return {'code': room.code, 'phase': room.phase, 'demo':meta.demo, 'generation':meta.generation, 'timing':clock, 'reveal':reveal, 'nickname': person.nickname,
             'team': person.team, 'team_name': TEAMS[person.team], 'policy': POLICY,
@@ -247,9 +250,11 @@ def instructor_state(code: str, credential=Depends(token), db: Session = Depends
                       'seconds_per_label': round(elapsed / 1000 / len(labels), 1) if labels else None})
     for t in teams:
         t['economy'] = team_state(db, room.code, t['id'], rules, room.phase in ('testing', 'reveal'))
+        if t['economy']['worker']:
+            t['economy']['worker']['can_decide'] = meta.demo
     comparison = comparison_state(db, room.code, rules) if room.phase in ('testing', 'reveal') else None
     reveal = reveal_state(db, room, meta, rules, TEAMS) if room.phase == 'reveal' else None
-    clock = timing(meta, room.phase)
+    clock = timing(meta, room.phase, rules['classroom'])
     db.commit()
     return {'code': room.code, 'phase': room.phase, 'demo':meta.demo, 'generation':meta.generation, 'timing':clock, 'reveal':reveal, 'teams': teams, 'policy': POLICY, 'economy_rules': rules, 'comparison': comparison,
             'participants': [{'id': p.id, 'nickname': p.nickname, 'team': p.team,
@@ -265,6 +270,10 @@ def change_phase(code: str, body: PhaseChange, credential=Depends(token), db: Se
                    'training': {'testing'}, 'testing': {'training', 'reveal'}, 'reveal': {'testing'}}
     if body.phase not in transitions[room.phase]:
         raise HTTPException(409, 'That phase transition is not available.')
+    if body.phase == 'testing' and not body.omit_untrained:
+        trained = {r.team for r in db.scalars(select(TrainingRun).where(TrainingRun.room_code == room.code))}
+        if len(trained) < 3:
+            raise HTTPException(409, 'Comparison omits untrained teams. Instructor must explicitly override.')
     meta = ensure_experience(db, room)
     transition_clock(meta, room.phase, body.phase)
     room.phase = body.phase
@@ -356,6 +365,8 @@ def purchase(code: str, team: int, body: PurchaseRequest, credential=Depends(tok
         if previous.action != body.action:
             raise HTTPException(409, 'This request identifier was already used for another purchase.')
         return {'saved': True, 'duplicate': True}
+    if rules['classroom'] and not classroom_decision(db, room.code, team).choice:
+        raise HTTPException(409, 'Worker compensation decision is pending.')
     cost = rules[CATALOG[body.action]['cost_key']]
     if account.balance < cost:
         raise HTTPException(409, 'Not enough shared credits.')
@@ -428,7 +439,10 @@ def train(code: str, team: int, body: TrainRequest, credential=Depends(token), d
     previous = db.scalar(select(TrainingRun).where(TrainingRun.room_code == room.code, TrainingRun.team == team, TrainingRun.request_id == body.request_id))
     if previous:
         return {'saved': True, 'run_id': previous.id, 'duplicate': True}
-    rows, _, tied, _, _ = team_data(db, room.code, team)
+    decision = classroom_decision(db, room.code, team) if rules['classroom'] else None
+    if decision and not decision.choice:
+        raise HTTPException(409, 'Worker compensation decision is pending.')
+    rows, _, tied, tasks, _ = team_data(db, room.code, team)
     problem = readiness(rows)
     if problem:
         raise HTTPException(409, problem)
@@ -438,18 +452,80 @@ def train(code: str, team: int, body: TrainRequest, credential=Depends(token), d
     signature = fingerprint(rows, account.configuration)
     if any(r.fingerprint == signature for r in runs):
         raise HTTPException(409, 'These labels and this configuration have already been trained. Change data or configuration before spending a run.')
-    electricity = rules['electricity_per_run'] * CONFIGURATIONS[account.configuration]['multiplier']
+    cost = charges(rules, account.configuration, decision.profile if decision else 'legacy')
+    electricity = cost['electricity']
+    if decision and sum(r.water for r in runs) + cost['water'] > rules['local_water_limit'] + 1e-9:
+        raise HTTPException(409, 'Not enough local cooling water remains for this profile.')
     if sum(r.electricity for r in runs) + electricity > rules['electricity_limit'] + 1e-9:
         raise HTTPException(409, 'Not enough illustrative electricity remains for this configuration. Choose a lighter option.')
     training_ms, evaluation, artifact = fit_and_evaluate(rows, account.configuration)
     run = TrainingRun(room_code=room.code, team=team, request_id=body.request_id, fingerprint=signature,
                       configuration=account.configuration, training_ms=training_ms, electricity=electricity,
-                      water=electricity*rules['water_per_kwh'],
-                      snapshot={'rows': rows, 'tied_posts_excluded': tied, 'class_counts': {label:sum(r['label']==label for r in rows) for label in ('allow','remove')}},
+                      water=cost['water'],
+                      snapshot={'site': decision.profile if decision else 'Legacy facility', 'contributors': [p.nickname for p in db.scalars(select(Participant).where(Participant.room_code == room.code, Participant.team == team, Participant.id.in_({t.participant_id for t in tasks if t.label is not None})))], 'lifecycle': 'Company funds maintenance and safe retirement; local maintenance and recycling workers bear handling burdens.', 'hardware': '2 fictional capacity units' if account.upgraded else '1 fictional capacity unit', 'rows': rows, 'tied_posts_excluded': tied, 'class_counts': {label:sum(r['label']==label for r in rows) for label in ('allow','remove')}},
                       evaluation=evaluation, artifact=artifact)
     db.add(run)
     db.commit()
     return {'saved': True, 'run_id': run.id, 'training_ms': training_ms}
+
+
+class WorkerRequest(TrainRequest):
+    choice: Literal['paid', 'unbilled']
+
+
+class RepresentativeRequest(RoomMutation):
+    participant_id: int
+
+
+class ProfileRequest(RoomMutation):
+    profile: Literal['air', 'evaporative']
+
+
+@app.post('/api/rooms/{code}/teams/{team}/representative')
+def representative(code: str, team: int, body: RepresentativeRequest, credential=Depends(token), db: Session = Depends(get_db)):
+    room = instructor(code, db, credential, lock=True)
+    require_generation(db, room, body.generation)
+    if team not in range(3) or not ensure_economy(db, room)['classroom'] or room.phase not in ('lobby', 'annotation', 'paused', 'complete', 'training'):
+        raise HTTPException(409, 'Representative changes are closed.')
+    person = db.get(Participant, body.participant_id)
+    if not person or person.room_code != room.code or person.team != team:
+        raise HTTPException(403, 'Choose a worker from this team and room.')
+    classroom_decision(db, room.code, team).representative_id = person.id
+    db.commit()
+    return {'saved': True}
+
+
+@app.post('/api/rooms/{code}/teams/{team}/worker')
+def compensate(code: str, team: int, body: WorkerRequest, credential=Depends(token), db: Session = Depends(get_db)):
+    room, person, account, rules = team_access(code, team, db, credential, allow_instructor=True, generation=body.generation)
+    person = spending_actor(db, room, team, person)
+    if not rules['classroom']:
+        raise HTTPException(409, 'Classroom mode required.')
+    decision = classroom_decision(db, room.code, team)
+    if person.id != decision.representative_id:
+        raise HTTPException(403, 'Only the designated worker representative can decide.')
+    if decision.choice:
+        if decision.request_id == body.request_id and decision.choice == body.choice:
+            return {'saved': True, 'duplicate': True}
+        raise HTTPException(409, 'The shift decision is already recorded.')
+    amount = rules['worker_payment'] if body.choice == 'paid' else 0
+    if account.balance < amount:
+        raise HTTPException(409, 'Not enough company credits.')
+    account.balance -= amount
+    decision.choice, decision.actor_id, decision.request_id = body.choice, person.id, body.request_id
+    decision.worker_credits = amount
+    db.commit()
+    return {'saved': True}
+
+
+@app.post('/api/rooms/{code}/teams/{team}/profile')
+def cooling_profile(code: str, team: int, body: ProfileRequest, credential=Depends(token), db: Session = Depends(get_db)):
+    room, _, _, rules = team_access(code, team, db, credential, allow_instructor=True, generation=body.generation)
+    if not rules['classroom']:
+        raise HTTPException(409, 'Classroom mode required.')
+    classroom_decision(db, room.code, team).profile = body.profile
+    db.commit()
+    return {'saved': True}
 
 
 def comparison_state(db, code, rules):

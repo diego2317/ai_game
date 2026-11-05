@@ -6,6 +6,12 @@ os.environ['DATABASE_URL'] = os.environ.get('TEST_DATABASE_URL', 'sqlite+pysqlit
 os.environ['INSTRUCTOR_SECRET'] = 'classroom-test-instructor-key'
 
 import pytest
+from sqlalchemy.engine import make_url
+
+# Destructive fixtures accept only databases explicitly named as tests.
+_test_url = make_url(os.environ['DATABASE_URL'])
+if _test_url.get_backend_name() != 'sqlite' and 'test' not in (_test_url.database or '').lower():
+    raise RuntimeError('TEST_DATABASE_URL must name a disposable test database.')
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

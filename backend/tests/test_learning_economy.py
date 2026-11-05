@@ -73,7 +73,7 @@ def test_one_device_training_evaluation_and_idempotency(client):
     assert before['economy']['runs_used']==1 and before['economy']['runs_remaining']==0
     assert 'evaluation' not in before['economy']['model'] and before['comparison'] is None
     assert train(client,base,person,'training-request-02').status_code==409
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     testing=state(client,base,person)
     comparison=testing['comparison']
     assert len(comparison['posts'])==20
@@ -159,7 +159,7 @@ def test_audits_preserve_labor_votes_and_change_training_data(client):
     stats=client.get(base+'/instructor',headers=teacher).json()['teams'][0]
     assert stats['annotations']==16 and stats['disagreements']==8
     assert train(client,base,a).status_code==200
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     assert state(client,base,a)['economy']['model']['training_posts']==8
 
 
@@ -187,7 +187,7 @@ def test_authorization_configuration_custom_rules_and_expansion_boundary(client)
     assert len(seen)==59  # Original solo queue plus 40 expansion posts.
     # Reusing a recorded request id for another action must never charge again.
     assert buy(client,base,person,'compute','annotation-pack-0').status_code==409
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     assert client.post(base+'/teams/0/configuration',headers=person,json={'configuration':'word'}).status_code==409
 
 
@@ -196,7 +196,7 @@ def test_improvement_round_stale_snapshot_and_no_test_label_leak(client):
     label_queue(client,base,person)
     client.post(base+'/phase',headers=teacher,json={'phase':'training'})
     train(client,base,person)
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     first=state(client,base,person)['economy']['model']
     client.post(base+'/phase',headers=teacher,json={'phase':'training'})
     buy(client,base,person,'compute')
@@ -206,7 +206,7 @@ def test_improvement_round_stale_snapshot_and_no_test_label_leak(client):
     assert current['economy']['model']['stale'] is True
     assert 'evaluation' not in current['economy']['model']
     assert train(client,base,person,'improved-training-request').status_code==200
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     improved=state(client,base,person)['economy']
     assert improved['model']['id']!=first['id'] and improved['model']['training_posts']==13
     assert len(improved['history'])==2 and improved['runs_used']==2
@@ -227,6 +227,7 @@ def test_existing_room_gets_default_economy_without_losing_labels(client):
         db.commit()
     restored=state(client,base,person)
     assert restored['completed']==2 and restored['economy']['balance']==100
+    assert restored['economy']['classroom'] is False and restored['economy']['worker'] is None
 
 
 @pytest.mark.skipif(not os.environ.get('TEST_DATABASE_URL','').startswith('postgresql'),reason='Requires PostgreSQL row locking.')
@@ -254,7 +255,7 @@ def test_three_models_compare_the_same_reference_and_show_real_disagreements(cli
     client.post(base+'/phase',headers=teacher,json={'phase':'training'})
     for team,person in enumerate(students):
         assert train(client,base,person,team=team).status_code==200
-    client.post(base+'/phase',headers=teacher,json={'phase':'testing'})
+    client.post(base+'/phase',headers=teacher,json={'phase':'testing','omit_untrained':True})
     comparison=state(client,base,students[0])['comparison']
     assert all(len(p['predictions'])==3 for p in comparison['posts'])
     assert any(p['disagreement'] for p in comparison['posts'])

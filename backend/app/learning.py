@@ -28,7 +28,7 @@ def readiness(rows):
         return 'Need at least 6 distinct usable posts. Label more posts or audit tied votes.'
     counts = {label: sum(row['label'] == label for row in rows) for label in ('allow', 'remove')}
     if min(counts.values()) < 2:
-        return 'Need at least 2 Allow and 2 Remove posts after majority voting. A single-class dataset cannot train this classifier.'
+        return ('Single-class dataset: one class is absent. Need at least 2 Allow and 2 Remove posts after majority voting.' if min(counts.values()) == 0 else 'Only one minority example: need at least 2 Allow and 2 Remove posts after majority voting.')
     return None
 
 

@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 
 from .content import assigned_posts
 from .economy import ensure_economy, team_state
-from .models import Assignment, AuditDecision, Participant, Purchase, RoomExperience, TeamAccount, TrainingRun, now
+from .models import Assignment, AuditDecision, Participant, Purchase, RoomExperience, TeamAccount, TrainingRun, ClassroomDecision, now
 
 DURATIONS = {'annotation': 300, 'paused': 300, 'training': 240, 'testing': 300, 'reveal': 300}
 
@@ -30,11 +30,11 @@ def ensure_experience(db, room):
     return meta
 
 
-def timing(meta, phase):
+def timing(meta, phase, classroom=False):
     elapsed = meta.elapsed_before_pause
     if phase != 'paused':
         elapsed += max(0, (now() - utc(meta.phase_started_at)).total_seconds())
-    return {'elapsed_seconds': round(elapsed, 1), 'recommended_seconds': DURATIONS.get(phase), 'paused': phase == 'paused'}
+    return {'elapsed_seconds': round(elapsed, 1), 'recommended_seconds': ({**DURATIONS, 'training': 360, 'testing': 120} if classroom else DURATIONS).get(phase), 'paused': phase == 'paused'}
 
 
 def transition_clock(meta, old_phase, new_phase):
@@ -84,7 +84,7 @@ def fill_demo_labels(db, room):
 def reset_session(db, room, meta, request_id):
     """Caller holds the room lock. Keep credentials, room code, and settings."""
     people = list(db.scalars(select(Participant).where(Participant.room_code == room.code).order_by(Participant.id)))
-    for model in (TrainingRun, Purchase, AuditDecision, TeamAccount):
+    for model in (TrainingRun, Purchase, AuditDecision, ClassroomDecision, TeamAccount):
         db.execute(delete(model).where(model.room_code == room.code))
     db.execute(delete(Assignment).where(Assignment.participant_id.in_([p.id for p in people])))
     for index, person in enumerate(people):

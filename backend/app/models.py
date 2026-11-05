@@ -113,3 +113,16 @@ class RoomExperience(Base):
     last_reset_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phase_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     elapsed_before_pause: Mapped[float] = mapped_column(Float, default=0)
+
+
+class ClassroomDecision(Base):
+    """Additive ledger and site selection; legacy team accounts stay unchanged."""
+    __tablename__ = 'classroom_decisions'
+    room_code: Mapped[str] = mapped_column(ForeignKey('rooms.code'), primary_key=True)
+    team: Mapped[int] = mapped_column(Integer, primary_key=True)
+    representative_id: Mapped[int | None] = mapped_column(ForeignKey('participants.id'), nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey('participants.id'), nullable=True)
+    choice: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    worker_credits: Mapped[int] = mapped_column(Integer, default=0)
+    profile: Mapped[str] = mapped_column(String(16), default='air')

@@ -25,7 +25,7 @@ def dashboard(client,base,teacher):
 
 
 def advance(client,base,teacher,phase,generation=0):
-    response=client.post(base+'/phase',headers=teacher,json={'phase':phase,'generation':generation})
+    response=client.post(base+'/phase',headers=teacher,json={'phase':phase,'generation':generation,'omit_untrained':phase=='testing'})
     assert response.status_code==200,response.text
 
 

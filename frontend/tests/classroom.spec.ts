@@ -10,6 +10,7 @@ test('instructor opens a room and a mobile student contributes labels', async ({
   teacher.on('pageerror', error => errors.push(error.message))
   await teacher.goto(`${base}/instructor`)
   await teacher.getByLabel('Instructor access key').fill(key)
+  await teacher.getByRole('checkbox',{name:/Focused 20-minute/}).uncheck()
   await teacher.getByRole('button', { name: 'Create game room' }).click()
   await expect(teacher.getByRole('heading', { name: 'The work behind the model.' })).toBeVisible()
   const code = (await teacher.locator('.room-code').innerText()).trim()
@@ -61,6 +62,8 @@ test('one mobile student can train, invest, compare, and improve without other t
   teacher.on('pageerror',e=>errors.push(e.message))
   await teacher.goto(`${base}/instructor`)
   await teacher.getByLabel('Instructor access key').fill(key)
+  teacher.on('dialog',dialog=>dialog.accept())
+  await teacher.getByRole('checkbox',{name:/Focused 20-minute/}).uncheck()
   await teacher.getByRole('button',{name:'Create game room'}).click()
   const code=(await teacher.locator('.room-code').innerText()).trim()
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true})
@@ -126,6 +129,7 @@ test('one mobile student can train, invest, compare, and improve without other t
   await expect(student.locator('.reveal-comparison')).toBeVisible()
   expect(await student.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
   await student.locator('.infrastructure').screenshot({path:'test-results/reveal-mobile.png'})
+  teacher.removeAllListeners('dialog')
   teacher.once('dialog',dialog=>dialog.accept(code))
   await teacher.getByRole('button',{name:'Reset room',exact:true}).click()
   await expect(teacher.getByRole('heading',{name:'Your workforce is assembling.'})).toBeVisible()
@@ -154,6 +158,7 @@ test('a local demonstration trains three models and reveals infrastructure witho
   await page.goto(`${base}/instructor`)
   await page.getByLabel('Instructor access key').fill(key)
   await page.getByRole('checkbox',{name:/Demonstration room/}).check()
+  await page.getByRole('checkbox',{name:/Focused 20-minute/}).uncheck()
   await page.getByRole('button',{name:'Create game room'}).click()
   await expect(page.locator('.demo-banner')).toContainText('15 simulated annotators')
   const saved=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('true-cost-session')!))
@@ -195,4 +200,57 @@ test('a local demonstration trains three models and reveals infrastructure witho
   await expect(page.locator('.model-saved')).toHaveCount(0)
   expect(errors).toEqual([])
   await context.close()
+})
+
+test('focused classroom: three real teams, late worker, compensation and site receipts',async({browser})=>{
+  test.setTimeout(120000)
+  const base=process.env.E2E_BASE_URL||'http://127.0.0.1:8766'
+  const tc=await browser.newContext()
+  const teacher=await tc.newPage()
+  teacher.on('dialog',dialog=>dialog.accept())
+  await teacher.goto(base+'/instructor')
+  await teacher.getByLabel('Instructor access key').fill(process.env.E2E_INSTRUCTOR_SECRET!)
+  await teacher.getByRole('button',{name:'Create game room'}).click()
+  const code=(await teacher.locator('.room-code').innerText()).trim()
+  const contexts=[]
+  const pages=[]
+  for(let i=0;i<4;i++){
+    if(i===3)await teacher.getByRole('button',{name:'Start annotation'}).click()
+    const ctx=await browser.newContext({viewport:{width:390,height:844}})
+    contexts.push(ctx)
+    const page=await ctx.newPage();pages.push(page)
+    await page.goto(`${base}/?room=${code}`)
+    await page.getByLabel('Your nickname').fill(`Worker ${i}`)
+    await page.getByRole('button',{name:'Enter the room'}).click()
+    await expect(page.getByText(new RegExp(`Worker ${i}`),{exact:true})).toBeVisible()
+  }
+  for(const page of pages.slice(0,3)){
+    for(const [i,label] of ['Allow','Remove','Allow','Remove','Allow','Allow'].entries()){
+      await page.getByRole('button',{name:label,exact:true}).click()
+      await expect(page.getByText(new RegExp(`${i+1} / \\d+ submitted`))).toBeVisible()
+    }
+  }
+  await teacher.getByRole('button',{name:'Begin training',exact:true}).click()
+  for(const page of pages.slice(0,3)){
+    await expect(page.getByRole('button',{name:'Train model',exact:true})).toBeDisabled()
+    await page.getByRole('button',{name:/Pay worker collective/}).click()
+    await expect(page.getByText(/Company procurement balance: 80/)).toBeVisible()
+    await page.getByLabel('Cooling profile').selectOption('evaporative')
+    await page.getByRole('button',{name:'Train model',exact:true}).click()
+    await expect(page.locator('.model-saved')).toBeVisible()
+    await page.reload()
+    await expect(page.locator('.model-saved')).toBeVisible()
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  }
+  await expect(pages[3].getByRole('button',{name:'Allow',exact:true})).toBeVisible()
+  await expect(teacher.locator('.company-floor .model-saved')).toHaveCount(3)
+  await teacher.getByRole('button',{name:'Compare models'}).click()
+  await teacher.getByRole('button',{name:'Reveal the hidden infrastructure'}).click()
+  await expect(teacher.getByRole('heading',{name:/Trace one stored prediction/})).toBeVisible()
+  await expect(teacher.getByText(/Session totals, all three companies: 6 fictional kWh; 18 L on-site water; 60 worker credits/)).toBeVisible()
+  await teacher.getByRole('button',{name:/^Cooling water/}).focus()
+  await teacher.keyboard.press('Enter')
+  await expect(teacher.locator('#node-detail').getByRole('heading',{name:'Cooling water',exact:true})).toBeVisible()
+  expect(await pages[0].evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await Promise.all(contexts.map(c=>c.close()));await tc.close()
 })

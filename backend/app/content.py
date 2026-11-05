@@ -150,7 +150,8 @@ def assigned_posts(team: int, seat: int) -> list[int]:
     pool = team_posts(team)
     # Everyone labels 8 anchors plus one of 5 rotating batches. Reuse batches
     # for larger teams so later arrivals still have a full, distinct-post queue.
-    return pool[:8] + pool[8 + (seat % 5)::5]
+    anchors = [0, 6, 1, 7, 2, 3, 4, 5]
+    return anchors + pool[8 + (seat % 5)::5]
 
 # Separately authored reference standard v1, applying the written policy to the
 # reserved examples. These are policy decisions, not universal moral judgments.
